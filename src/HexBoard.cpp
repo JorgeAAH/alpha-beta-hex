@@ -3,7 +3,7 @@
 #include <iostream>
 #include "HexBoard.h"
 
-HexBoard engine_board(3);
+HexBoard engine_board(13);
 
 uint16_t solve_matrix(float **matrix, uint16_t number_of_unknowns, uint16_t central_diagonal_width);
 
