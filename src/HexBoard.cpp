@@ -262,7 +262,7 @@ float *MatrixSolver::solve_matrix(float *b_column_matrix){
             normalized_total_error += future_r[i]*future_r[i];
         }
         normalized_total_error = normalized_total_error/float(number_of_unknowns);
-        if ((normalized_total_error < 0.0000005F) || (k >= (number_of_unknowns-1))){
+        if ((normalized_total_error < 0.0000005F) || (k > (number_of_unknowns/4))){
             delete [] actual_x;
             delete [] actual_r;
             delete [] actual_p;
