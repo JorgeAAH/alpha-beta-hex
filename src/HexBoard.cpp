@@ -214,6 +214,18 @@ uint16_t MatrixSolver::add_assignement(uint16_t row, uint16_t column, float add_
 }
 
 float *MatrixSolver::solve_matrix(float *b_column_matrix){
+    //We prepare the matrix for fastest resolution.
+    for (uint16_t i = 0; i < number_of_unknowns; i++){
+        uint16_t diagonal_position = 0;
+        while(i != matrix_column_positions[i][diagonal_position]){
+            diagonal_position++;
+        }
+        float diagonal_inverse = 1.0F/matrix_values[i][diagonal_position];
+        b_column_matrix[i] = b_column_matrix[i]*diagonal_inverse;
+        for(uint16_t j = 0; j < row_occupation[i]; j++){
+            matrix_values[i][j] = matrix_values[i][j]*diagonal_inverse;
+        }
+    }
     //We use the following implementation of conjugate gradient descent (from Wikipedia):
     //r_0 = b - Ax_0
     float *actual_x = new float[number_of_unknowns];
@@ -234,19 +246,22 @@ float *MatrixSolver::solve_matrix(float *b_column_matrix){
     float *future_x = new float[number_of_unknowns];
     float *future_r = new float[number_of_unknowns];
     float *future_p = new float[number_of_unknowns];
+    float actual_r_dot = 0.0F;
+    float future_r_dot = 0.0F;
+    for (uint16_t i = 0; i < number_of_unknowns; i++){
+        actual_r_dot += actual_r[i]*actual_r[i];
+    }
     //Repeat
     while (true){
         float a;
         float B;
         //  a_k = <r_k,r_k>/<p_k,p_k>A
         float *actual_Ap = multiply_sparse_matrix_with_column_matrix(actual_p);
-        float numerator = 0.0F;
         float denominator = 0.0F;
         for (uint16_t i = 0; i < number_of_unknowns; i++){
-            numerator += actual_r[i]*actual_r[i];
             denominator += actual_p[i]*actual_Ap[i];
         }
-        a = numerator/denominator;
+        a = actual_r_dot/denominator;
         //  x_(k+1) = x_k + a_k*p_k
         for (uint16_t i = 0; i < number_of_unknowns; i++){
             future_x[i] = actual_x[i] + a*actual_p[i];
@@ -257,12 +272,13 @@ float *MatrixSolver::solve_matrix(float *b_column_matrix){
         }
         delete [] actual_Ap;
         //  Exit if r_(k+1) is small
-        float normalized_total_error = 0.0F;
+        float max_error = 0.0F;
         for (uint16_t i = 0; i < number_of_unknowns; i++){
-            normalized_total_error += future_r[i]*future_r[i];
+            if (max_error < std::abs(future_r[i])){
+                max_error = std::abs(future_r[i]);
+            }
         }
-        normalized_total_error = normalized_total_error/float(number_of_unknowns);
-        if ((normalized_total_error < 0.0000005F) || (k > (number_of_unknowns/4))){
+        if ((max_error < 0.01F)|| (k > 20)){
             delete [] actual_x;
             delete [] actual_r;
             delete [] actual_p;
@@ -271,13 +287,11 @@ float *MatrixSolver::solve_matrix(float *b_column_matrix){
             return future_x;
         }
         //  B_k = <r_(k+1), r_(k+1)>/<r_k, r_k>
-        numerator = 0.0F;
-        denominator = 0.0F;
+        future_r_dot = 0.0F;
         for (uint16_t i = 0; i < number_of_unknowns; i++){
-            numerator += future_r[i]*future_r[i];
-            denominator += actual_r[i]*actual_r[i];
+            future_r_dot += future_r[i]*future_r[i];
         }
-        B = numerator/denominator;
+        B = future_r_dot/actual_r_dot;
         //  p_(k+1) = r_(k+1) + B_k*p_k
         for (uint16_t i = 0; i < number_of_unknowns; i++){
             future_p[i] = future_r[i]+B*actual_p[i];
@@ -294,6 +308,7 @@ float *MatrixSolver::solve_matrix(float *b_column_matrix){
         temp = actual_p;
         actual_p = future_p;
         future_p = temp;
+        actual_r_dot = future_r_dot;
     }
 }
 
@@ -530,7 +545,7 @@ int16_t HexBoard::evaluate_board(){
 //    std::cout << "Corriente azul: " << current_flux_for_blue << std::endl;
 //    std::cout << "Corriente roja: " << current_flux_for_red << std::endl;
 //    std::cout << "Diferencia: " << evaluation_score << std::endl;
-    evaluation_score = std::exp(evaluation_score/2.0F);
+    evaluation_score = std::exp(evaluation_score/2.0F); // Depends on board size!!!
     evaluation_score = (evaluation_score-(1/evaluation_score))/(evaluation_score+(1/evaluation_score));
 //    std::cout << "Resultado de evaluacion: " << evaluation_score << std::endl;
     int16_t return_variable = int16_t(evaluation_score*1000.0F);
@@ -548,12 +563,10 @@ float HexBoard::evaluation_from_blue_perspective(){
         voltage_assigned[blue_connected_beta[i]] = -1;
     }
     uint16_t number_of_unknowns = (side_size-2)*side_size;
-    float **matrix = new float*[number_of_unknowns];
-    for(uint16_t i = 0; i < number_of_unknowns; i++){
-        matrix[i] = new float[number_of_unknowns+1];
-        for (uint16_t j = 0; j < number_of_unknowns+1; j++){
-            matrix[i][j] = 0.0F;
-        }
+    MatrixSolver sparse_matrix(number_of_unknowns);
+    float *b_column_matrix = new float[number_of_unknowns];
+    for (uint16_t i = 0; i < number_of_unknowns; i++){
+        b_column_matrix[i] = 0.0F;
     }
     uint16_t *mailbox_to_matrix = new uint16_t[big_board_size];
     for (uint16_t i = 0; i < side_size; i++){
@@ -610,21 +623,24 @@ float HexBoard::evaluation_from_blue_perspective(){
                         total_resistence += 50.0F;
                     }
                     float inverse_total_resistence = 1.0F/total_resistence;
-                    matrix[actual_matrix_position][actual_matrix_position] += inverse_total_resistence;
+                    sparse_matrix.add_assignement(actual_matrix_position, actual_matrix_position, +inverse_total_resistence);
                     if (voltage_assigned[adjacent_board_position]==0){
-                        matrix[actual_matrix_position][mailbox_to_matrix[adjacent_board_position]] -= inverse_total_resistence;
+                        sparse_matrix.add_assignement(actual_matrix_position, mailbox_to_matrix[adjacent_board_position], -inverse_total_resistence);
                     }
                     if (voltage_assigned[adjacent_board_position]==1){
-                        matrix[actual_matrix_position][number_of_unknowns]+=inverse_total_resistence;
+                        b_column_matrix[actual_matrix_position] += inverse_total_resistence;
                     }
                     if (voltage_assigned[adjacent_board_position]==-1){
-                        matrix[actual_matrix_position][number_of_unknowns]-=inverse_total_resistence;
+                        b_column_matrix[actual_matrix_position] -= inverse_total_resistence;
                     }
                 }
             }
         }
     }
-    solve_matrix(matrix, number_of_unknowns, side_size-2);
+    float *solution_by_sparse_matrix = sparse_matrix.solve_matrix(b_column_matrix);
+//    for (uint16_t i = 0; i < number_of_unknowns; i++){
+//        std::cout << (matrix[i][number_of_unknowns] - solution_by_sparse_matrix[i]) << "    ";
+//    }
     //Calculation of total current flux.
     //Calculation of current in the alpha side.
     float entering_current = 0.0F;
@@ -662,7 +678,8 @@ float HexBoard::evaluation_from_blue_perspective(){
                     total_resistence += 50.0F;
                 }
                 float inverse_total_resistence = 1.0F/total_resistence;
-                entering_current += (1.0F-matrix[mailbox_to_matrix[adjacent_board_position]][number_of_unknowns])*inverse_total_resistence;
+                //entering_current += (1.0F-matrix[mailbox_to_matrix[adjacent_board_position]][number_of_unknowns])*inverse_total_resistence;
+                entering_current += (1.0F-solution_by_sparse_matrix[mailbox_to_matrix[adjacent_board_position]])*inverse_total_resistence;
             }
         }
     }
@@ -702,7 +719,8 @@ float HexBoard::evaluation_from_blue_perspective(){
                     total_resistence += 50.0F;
                 }
                 float inverse_total_resistence = 1.0F/total_resistence;
-                exiting_current += (matrix[mailbox_to_matrix[adjacent_board_position]][number_of_unknowns]+1.0F)*inverse_total_resistence;
+                //exiting_current += (matrix[mailbox_to_matrix[adjacent_board_position]][number_of_unknowns]+1.0F)*inverse_total_resistence;
+                exiting_current += (solution_by_sparse_matrix[mailbox_to_matrix[adjacent_board_position]]+1.0F)*inverse_total_resistence;
             }
         }
     }
@@ -710,10 +728,8 @@ float HexBoard::evaluation_from_blue_perspective(){
     float total_current_flux_for_blue = (exiting_current+entering_current)/2;
     delete []voltage_assigned;
     delete []mailbox_to_matrix;
-    for (uint16_t i = 0; i < number_of_unknowns; i++){
-        delete [] matrix[i];
-    }
-    delete []matrix;
+    delete [] b_column_matrix;
+    delete [] solution_by_sparse_matrix;
     return total_current_flux_for_blue;
 }
 
