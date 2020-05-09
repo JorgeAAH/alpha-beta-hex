@@ -278,7 +278,7 @@ float *MatrixSolver::solve_matrix(float *b_column_matrix){
                 max_error = std::abs(future_r[i]);
             }
         }
-        if ((max_error < 0.01F)|| (k > 20)){
+        if ((max_error < 0.01F)|| (k > 30)){
             delete [] actual_x;
             delete [] actual_r;
             delete [] actual_p;
@@ -545,7 +545,7 @@ int16_t HexBoard::evaluate_board(){
 //    std::cout << "Corriente azul: " << current_flux_for_blue << std::endl;
 //    std::cout << "Corriente roja: " << current_flux_for_red << std::endl;
 //    std::cout << "Diferencia: " << evaluation_score << std::endl;
-    evaluation_score = std::exp(evaluation_score/2.0F); // Depends on board size!!!
+    evaluation_score = std::exp(evaluation_score*3.0F/float(side_size)); // Depends on board size!!!
     evaluation_score = (evaluation_score-(1/evaluation_score))/(evaluation_score+(1/evaluation_score));
 //    std::cout << "Resultado de evaluacion: " << evaluation_score << std::endl;
     int16_t return_variable = int16_t(evaluation_score*1000.0F);
