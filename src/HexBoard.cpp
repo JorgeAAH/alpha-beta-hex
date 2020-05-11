@@ -2,10 +2,9 @@
 #include <random>
 #include <iostream>
 #include "HexBoard.h"
+#include "IncrementalEvaluationMatrix.h"
 
 HexBoard engine_board(13);
-
-uint16_t solve_matrix(float **matrix, uint16_t number_of_unknowns, uint16_t central_diagonal_width);
 
 class UnionFindData {
     public:
@@ -27,21 +26,6 @@ class UnionFindData {
         uint16_t big_board_size;
         //IMPORTANT!!! id_parent and number_of_children are accessed by moves to big_board, so
         //them have to had big_board size. (Obviously, some parts of the arrays will not be used).
-};
-
-class MatrixSolver {
-    public:
-        MatrixSolver(uint16_t number_of_unknowns_parameter);
-        ~MatrixSolver();
-        uint16_t add_assignement(uint16_t row, uint16_t column, float add_assignement_value);
-        float *solve_matrix(float *b_column_matrix);
-
-    private:
-        float *multiply_sparse_matrix_with_column_matrix(float *column_matrix);
-        uint16_t number_of_unknowns;
-        uint16_t *row_occupation;
-        uint16_t **matrix_column_positions;
-        float **matrix_values;
 };
 
 GeneratedMoves::GeneratedMoves(uint16_t number_of_hexes){
@@ -174,156 +158,6 @@ uint16_t UnionFindData::find_parent(uint16_t id_a){
     return parent_a_node;
 }
 
-MatrixSolver::MatrixSolver(uint16_t number_of_unknowns_parameter){
-    number_of_unknowns = number_of_unknowns_parameter;
-    row_occupation = new uint16_t[number_of_unknowns];
-    matrix_column_positions = new uint16_t*[number_of_unknowns];
-    matrix_values = new float*[number_of_unknowns];
-    for (uint16_t i = 0; i < number_of_unknowns; i++){
-        row_occupation[i] = 0;
-        //We only need 7 places: 1 for the central hexagon and 6 for the adjacent.
-        matrix_column_positions[i] = new uint16_t[7];
-        matrix_values[i] = new float[7];
-    }
-}
-
-MatrixSolver::~MatrixSolver(){
-    delete [] row_occupation;
-    for (uint16_t i = 0; i < number_of_unknowns; i++){
-        delete [] matrix_column_positions[i];
-        delete [] matrix_values[i];
-    }
-    delete [] matrix_column_positions;
-    delete [] matrix_values;
-}
-
-uint16_t MatrixSolver::add_assignement(uint16_t row, uint16_t column, float add_assignement_value){
-    uint16_t actual_row_occupation = row_occupation[row];
-    for (uint16_t i = 0; i < actual_row_occupation; i++){
-        if (column == matrix_column_positions[row][i]){
-            //The element exist on the sparse matrix, so we only add-assign.
-            matrix_values[row][i] += add_assignement_value;
-            return 0;
-        }
-    }
-    //We create the new element of the sparse matrix.
-    matrix_column_positions[row][actual_row_occupation] = column;
-    matrix_values[row][actual_row_occupation] = add_assignement_value;
-    row_occupation[row]++;
-    return 0;
-}
-
-float *MatrixSolver::solve_matrix(float *b_column_matrix){
-    //We prepare the matrix for fastest resolution.
-    for (uint16_t i = 0; i < number_of_unknowns; i++){
-        uint16_t diagonal_position = 0;
-        while(i != matrix_column_positions[i][diagonal_position]){
-            diagonal_position++;
-        }
-        float diagonal_inverse = 1.0F/matrix_values[i][diagonal_position];
-        b_column_matrix[i] = b_column_matrix[i]*diagonal_inverse;
-        for(uint16_t j = 0; j < row_occupation[i]; j++){
-            matrix_values[i][j] = matrix_values[i][j]*diagonal_inverse;
-        }
-    }
-    //We use the following implementation of conjugate gradient descent (from Wikipedia):
-    //r_0 = b - Ax_0
-    float *actual_x = new float[number_of_unknowns];
-    for (uint16_t i = 0; i < number_of_unknowns; i++){
-        actual_x[i] = 0.0F;
-    }
-    float *actual_r = multiply_sparse_matrix_with_column_matrix(actual_x);
-    for (uint16_t i = 0; i < number_of_unknowns; i++){
-        actual_r[i] = b_column_matrix[i] - actual_r[i];
-    }
-    //p_0 = r_0
-    float *actual_p = new float[number_of_unknowns];
-    for (uint16_t i = 0; i < number_of_unknowns; i++){
-        actual_p[i] = actual_r[i];
-    }
-    //k = 0
-    uint16_t k = 0;
-    float *future_x = new float[number_of_unknowns];
-    float *future_r = new float[number_of_unknowns];
-    float *future_p = new float[number_of_unknowns];
-    float actual_r_dot = 0.0F;
-    float future_r_dot = 0.0F;
-    for (uint16_t i = 0; i < number_of_unknowns; i++){
-        actual_r_dot += actual_r[i]*actual_r[i];
-    }
-    //Repeat
-    while (true){
-        float a;
-        float B;
-        //  a_k = <r_k,r_k>/<p_k,p_k>A
-        float *actual_Ap = multiply_sparse_matrix_with_column_matrix(actual_p);
-        float denominator = 0.0F;
-        for (uint16_t i = 0; i < number_of_unknowns; i++){
-            denominator += actual_p[i]*actual_Ap[i];
-        }
-        a = actual_r_dot/denominator;
-        //  x_(k+1) = x_k + a_k*p_k
-        for (uint16_t i = 0; i < number_of_unknowns; i++){
-            future_x[i] = actual_x[i] + a*actual_p[i];
-        }
-        //  r_(k+1) = r_k - a_k*A*p_k
-        for (uint16_t i = 0; i < number_of_unknowns; i++){
-            future_r[i] = actual_r[i] - a*actual_Ap[i];
-        }
-        delete [] actual_Ap;
-        //  Exit if r_(k+1) is small
-        float max_error = 0.0F;
-        for (uint16_t i = 0; i < number_of_unknowns; i++){
-            if (max_error < std::abs(future_r[i])){
-                max_error = std::abs(future_r[i]);
-            }
-        }
-        if ((max_error < 0.01F)|| (k > 30)){
-            delete [] actual_x;
-            delete [] actual_r;
-            delete [] actual_p;
-            delete [] future_r;
-            delete [] future_p;
-            return future_x;
-        }
-        //  B_k = <r_(k+1), r_(k+1)>/<r_k, r_k>
-        future_r_dot = 0.0F;
-        for (uint16_t i = 0; i < number_of_unknowns; i++){
-            future_r_dot += future_r[i]*future_r[i];
-        }
-        B = future_r_dot/actual_r_dot;
-        //  p_(k+1) = r_(k+1) + B_k*p_k
-        for (uint16_t i = 0; i < number_of_unknowns; i++){
-            future_p[i] = future_r[i]+B*actual_p[i];
-        }
-        k++;
-        //Preparing next iteration.
-        float *temp;
-        temp = actual_x;
-        actual_x = future_x;
-        future_x = temp;
-        temp = actual_r;
-        actual_r = future_r;
-        future_r = temp;
-        temp = actual_p;
-        actual_p = future_p;
-        future_p = temp;
-        actual_r_dot = future_r_dot;
-    }
-}
-
-float *MatrixSolver::multiply_sparse_matrix_with_column_matrix(float *column_matrix){
-    float *result_matrix = new float[number_of_unknowns];
-    for (uint16_t i = 0; i < number_of_unknowns; i++){
-        result_matrix[i] = 0.0F;
-        uint16_t actual_row_occupation = row_occupation[i];
-        for (uint16_t j = 0; j < actual_row_occupation; j++){
-            result_matrix[i] += matrix_values[i][j]*column_matrix[matrix_column_positions[i][j]];
-        }
-    }
-    return result_matrix;
-}
-
 HexBoard::HexBoard(uint16_t side_size_parameter){
     side_size = side_size_parameter;
     number_of_hexes = side_size*side_size;
@@ -400,6 +234,9 @@ HexBoard::HexBoard(uint16_t side_size_parameter){
         zobrist_const[i][0] = dist(twister);
         zobrist_const[i][1] = dist(twister);
     }
+    //Generation of IncrementalEvaluationMatrix for blue and red perspective
+    evaluation_from_blue_perspective = new IncrementalEvaluationMatrix(side_size, big_board_size, 1, big_board, mailbox_to_big_board, blue_connected_alpha, blue_connected_beta);
+    evaluation_from_red_perspective = new IncrementalEvaluationMatrix(side_size, big_board_size, -1, big_board, mailbox_to_big_board, red_connected_alpha, red_connected_beta);
 }
 
 HexBoard::~HexBoard(){
@@ -414,6 +251,8 @@ HexBoard::~HexBoard(){
         delete [] zobrist_const[i];
     }
     delete []zobrist_const;
+    delete evaluation_from_blue_perspective;
+    delete evaluation_from_red_perspective;
 }
 
 uint64_t HexBoard::get_zobrist_hash(){
@@ -425,6 +264,8 @@ uint16_t HexBoard::make_move(uint16_t move_made){
     big_board[move_made]=player_to_move;
     player_to_move *= -1;
     number_of_moves_maked++;
+    evaluation_from_blue_perspective->set_hex_to_board(big_board, move_made);
+    evaluation_from_red_perspective->set_hex_to_board(big_board, move_made);
     return 0;
 }
 
@@ -433,6 +274,8 @@ uint16_t HexBoard::unmake_move(uint16_t move_to_be_unmade){
     big_board[move_to_be_unmade]=0;
     player_to_move *= -1;
     number_of_moves_maked--;
+    evaluation_from_blue_perspective->set_hex_to_board(big_board, move_to_be_unmade);
+    evaluation_from_red_perspective->set_hex_to_board(big_board, move_to_be_unmade);
     return 0;
 }
 
@@ -536,16 +379,17 @@ int16_t HexBoard::evaluate_board(){
         return return_variable*int16_t(player_to_move);
     }
     //Makes evaluation from blue.
-    float current_flux_for_blue = evaluation_from_blue_perspective();
+    float current_flux_for_blue = evaluation_from_blue_perspective->evaluate();
     //Makes evaluation from red.
-    float current_flux_for_red = evaluation_from_red_perspective();
+    float current_flux_for_red = evaluation_from_red_perspective->evaluate();
     //Makes evaluation from blue perspective.
     float evaluation_score = current_flux_for_blue-current_flux_for_red;
 //    std::cout << "---------------------------------" << std::endl;
 //    std::cout << "Corriente azul: " << current_flux_for_blue << std::endl;
 //    std::cout << "Corriente roja: " << current_flux_for_red << std::endl;
 //    std::cout << "Diferencia: " << evaluation_score << std::endl;
-    evaluation_score = std::exp(evaluation_score*3.0F/float(side_size)); // Depends on board size!!!
+//    evaluation_score = std::exp(evaluation_score*3.0F/float(side_size)); // Depends on board size!!!
+    evaluation_score = std::exp(evaluation_score*0.5F);
     evaluation_score = (evaluation_score-(1/evaluation_score))/(evaluation_score+(1/evaluation_score));
 //    std::cout << "Resultado de evaluacion: " << evaluation_score << std::endl;
     int16_t return_variable = int16_t(evaluation_score*1000.0F);
@@ -553,416 +397,364 @@ int16_t HexBoard::evaluate_board(){
     return return_variable*int16_t(player_to_move);
 }
 
-float HexBoard::evaluation_from_blue_perspective(){
-    int8_t *voltage_assigned = new int8_t[big_board_size];
-    for (uint16_t i = 0; i < big_board_size; i++){
-        voltage_assigned[i] = 0;
-    }
-    for (uint16_t i = 0; i < side_size; i++){
-        voltage_assigned[blue_connected_alpha[i]] = 1;
-        voltage_assigned[blue_connected_beta[i]] = -1;
-    }
-    uint16_t number_of_unknowns = (side_size-2)*side_size;
-    MatrixSolver sparse_matrix(number_of_unknowns);
-    float *b_column_matrix = new float[number_of_unknowns];
-    for (uint16_t i = 0; i < number_of_unknowns; i++){
-        b_column_matrix[i] = 0.0F;
-    }
-    uint16_t *mailbox_to_matrix = new uint16_t[big_board_size];
-    for (uint16_t i = 0; i < side_size; i++){
-        for (uint16_t j = 0; j < (side_size-2); j++){
-            mailbox_to_matrix[(i+1)*(side_size+2)+(j+2)] = i*(side_size-2)+j;
-        }
-    }
-    //The matrix filler cycle began:
-    for (uint16_t i = 0; i < number_of_hexes; i++){
-        uint16_t actual_board_position = mailbox_to_big_board[i];
-        if (voltage_assigned[actual_board_position]==0){
-            uint16_t actual_matrix_position = mailbox_to_matrix[actual_board_position];
-            for (uint16_t j = 0; j < 6; j++){
-                uint16_t adjacent_board_position;
-                switch (j){
-                case 0:
-                    adjacent_board_position = actual_board_position+1;
-                    break;
-                case 1:
-                    adjacent_board_position = actual_board_position+(side_size+2);
-                    break;
-                case 2:
-                    adjacent_board_position = actual_board_position+(side_size+1);
-                    break;
-                case 3:
-                    adjacent_board_position = actual_board_position-1;
-                    break;
-                case 4:
-                    adjacent_board_position = actual_board_position-(side_size+2);
-                    break;
-                case 5:
-                    adjacent_board_position = actual_board_position-(side_size+1);
-                    break;
-                }
-                if (big_board[adjacent_board_position] != 2){
-                    float total_resistence = 0.0F;
-                    //Code dependent of the blue player.
-                    if (big_board[actual_board_position]==0){
-                        total_resistence += 0.5F;
-                    }
-                    if (big_board[actual_board_position]==1){
-                        total_resistence += 0.005F;
-                    }
-                    if (big_board[actual_board_position]==-1){
-                        total_resistence += 50.0F;
-                    }
-                    if (big_board[adjacent_board_position]==0){
-                        total_resistence += 0.5F;
-                    }
-                    if (big_board[adjacent_board_position]==1){
-                        total_resistence += 0.005F;
-                    }
-                    if (big_board[adjacent_board_position]==-1){
-                        total_resistence += 50.0F;
-                    }
-                    float inverse_total_resistence = 1.0F/total_resistence;
-                    sparse_matrix.add_assignement(actual_matrix_position, actual_matrix_position, +inverse_total_resistence);
-                    if (voltage_assigned[adjacent_board_position]==0){
-                        sparse_matrix.add_assignement(actual_matrix_position, mailbox_to_matrix[adjacent_board_position], -inverse_total_resistence);
-                    }
-                    if (voltage_assigned[adjacent_board_position]==1){
-                        b_column_matrix[actual_matrix_position] += inverse_total_resistence;
-                    }
-                    if (voltage_assigned[adjacent_board_position]==-1){
-                        b_column_matrix[actual_matrix_position] -= inverse_total_resistence;
-                    }
-                }
-            }
-        }
-    }
-    float *solution_by_sparse_matrix = sparse_matrix.solve_matrix(b_column_matrix);
+//float HexBoard::evaluation_from_blue_perspective(){
+//    int8_t *voltage_assigned = new int8_t[big_board_size];
+//    for (uint16_t i = 0; i < big_board_size; i++){
+//        voltage_assigned[i] = 0;
+//    }
+//    for (uint16_t i = 0; i < side_size; i++){
+//        voltage_assigned[blue_connected_alpha[i]] = 1;
+//        voltage_assigned[blue_connected_beta[i]] = -1;
+//    }
+//    uint16_t number_of_unknowns = (side_size-2)*side_size;
+//    MatrixSolver sparse_matrix(number_of_unknowns);
+//    float *b_column_matrix = new float[number_of_unknowns];
 //    for (uint16_t i = 0; i < number_of_unknowns; i++){
-//        std::cout << (matrix[i][number_of_unknowns] - solution_by_sparse_matrix[i]) << "    ";
+//        b_column_matrix[i] = 0.0F;
 //    }
-    //Calculation of total current flux.
-    //Calculation of current in the alpha side.
-    float entering_current = 0.0F;
-    for (uint16_t i = 0; i < side_size; i++){
-        uint16_t actual_board_position = blue_connected_alpha[i];
-        for (uint16_t j = 0; j < 2; j++){
-            uint16_t adjacent_board_position;
-            switch (j){
-            case 0:
-                adjacent_board_position = actual_board_position-(side_size+1);
-                break;
-            case 1:
-                adjacent_board_position = actual_board_position+1;;
-                break;
-            }
-            if (big_board[adjacent_board_position] != 2){
-                float total_resistence = 0.0F;
-                //Code dependent of the blue player.
-                if (big_board[actual_board_position]==0){
-                    total_resistence += 0.5F;
-                }
-                if (big_board[actual_board_position]==1){
-                    total_resistence += 0.005F;
-                }
-                if (big_board[actual_board_position]==-1){
-                    total_resistence += 50.0F;
-                }
-                if (big_board[adjacent_board_position]==0){
-                    total_resistence += 0.5F;
-                }
-                if (big_board[adjacent_board_position]==1){
-                    total_resistence += 0.005F;
-                }
-                if (big_board[adjacent_board_position]==-1){
-                    total_resistence += 50.0F;
-                }
-                float inverse_total_resistence = 1.0F/total_resistence;
-                //entering_current += (1.0F-matrix[mailbox_to_matrix[adjacent_board_position]][number_of_unknowns])*inverse_total_resistence;
-                entering_current += (1.0F-solution_by_sparse_matrix[mailbox_to_matrix[adjacent_board_position]])*inverse_total_resistence;
-            }
-        }
-    }
-    //Calculation of current in the beta side.
-    float exiting_current = 0.0F;
-    for (uint16_t i = 0; i < side_size; i++){
-        uint16_t actual_board_position = blue_connected_beta[i];
-        for (uint16_t j = 0; j < 2; j++){
-            uint16_t adjacent_board_position;
-            switch (j){
-            case 0:
-                adjacent_board_position = actual_board_position+(side_size+1);
-                break;
-            case 1:
-                adjacent_board_position = actual_board_position-1;;
-                break;
-            }
-            if (big_board[adjacent_board_position] != 2){
-                float total_resistence = 0.0F;
-                //Code dependent of the blue player.
-                if (big_board[actual_board_position]==0){
-                    total_resistence += 0.5F;
-                }
-                if (big_board[actual_board_position]==1){
-                    total_resistence += 0.005F;
-                }
-                if (big_board[actual_board_position]==-1){
-                    total_resistence += 50.0F;
-                }
-                if (big_board[adjacent_board_position]==0){
-                    total_resistence += 0.5F;
-                }
-                if (big_board[adjacent_board_position]==1){
-                    total_resistence += 0.005F;
-                }
-                if (big_board[adjacent_board_position]==-1){
-                    total_resistence += 50.0F;
-                }
-                float inverse_total_resistence = 1.0F/total_resistence;
-                //exiting_current += (matrix[mailbox_to_matrix[adjacent_board_position]][number_of_unknowns]+1.0F)*inverse_total_resistence;
-                exiting_current += (solution_by_sparse_matrix[mailbox_to_matrix[adjacent_board_position]]+1.0F)*inverse_total_resistence;
-            }
-        }
-    }
-    //And the average of exiting and entering current
-    float total_current_flux_for_blue = (exiting_current+entering_current)/2;
-    delete []voltage_assigned;
-    delete []mailbox_to_matrix;
-    delete [] b_column_matrix;
-    delete [] solution_by_sparse_matrix;
-    return total_current_flux_for_blue;
-}
-
-float HexBoard::evaluation_from_red_perspective(){
-    int8_t *voltage_assigned = new int8_t[big_board_size];
-    for (uint16_t i = 0; i < big_board_size; i++){
-        voltage_assigned[i] = 0;
-    }
-    for (uint16_t i = 0; i < side_size; i++){
-        voltage_assigned[red_connected_alpha[i]] = 1;
-        voltage_assigned[red_connected_beta[i]] = -1;
-    }
-    uint16_t number_of_unknowns = (side_size-2)*side_size;
-    float **matrix = new float*[number_of_unknowns];
-    for(uint16_t i = 0; i < number_of_unknowns; i++){
-        matrix[i] = new float[number_of_unknowns+1];
-        for (uint16_t j = 0; j < number_of_unknowns+1; j++){
-            matrix[i][j] = 0.0F;
-        }
-    }
-    uint16_t *mailbox_to_matrix = new uint16_t[big_board_size];
-    for (uint16_t i = 0; i < (side_size-2); i++){
-        for (uint16_t j = 0; j < side_size; j++){
-            mailbox_to_matrix[(i+2)*(side_size+2)+(j+1)] = i*side_size+j;
-        }
-    }
-    //The matrix filler cycle began:
-    for (uint16_t i = 0; i < number_of_hexes; i++){
-        uint16_t actual_board_position = mailbox_to_big_board[i];
-        if (voltage_assigned[actual_board_position]==0){
-            uint16_t actual_matrix_position = mailbox_to_matrix[actual_board_position];
-            for (uint16_t j = 0; j < 6; j++){
-                uint16_t adjacent_board_position;
-                switch (j){
-                case 0:
-                    adjacent_board_position = actual_board_position+1;
-                    break;
-                case 1:
-                    adjacent_board_position = actual_board_position+(side_size+2);
-                    break;
-                case 2:
-                    adjacent_board_position = actual_board_position+(side_size+1);
-                    break;
-                case 3:
-                    adjacent_board_position = actual_board_position-1;
-                    break;
-                case 4:
-                    adjacent_board_position = actual_board_position-(side_size+2);
-                    break;
-                case 5:
-                    adjacent_board_position = actual_board_position-(side_size+1);
-                    break;
-                }
-                if (big_board[adjacent_board_position] != 2){
-                    float total_resistence = 0.0F;
-                    //Code dependent of the red player.
-                    if (big_board[actual_board_position]==0){
-                        total_resistence += 0.5F;
-                    }
-                    if (big_board[actual_board_position]==1){
-                        total_resistence += 50.0F;
-                    }
-                    if (big_board[actual_board_position]==-1){
-                        total_resistence += 0.005F;
-                    }
-                    if (big_board[adjacent_board_position]==0){
-                        total_resistence += 0.5F;
-                    }
-                    if (big_board[adjacent_board_position]==1){
-                        total_resistence += 50.0F;
-                    }
-                    if (big_board[adjacent_board_position]==-1){
-                        total_resistence += 0.005F;
-                    }
-                    float inverse_total_resistence = 1.0F/total_resistence;
-                    matrix[actual_matrix_position][actual_matrix_position] += inverse_total_resistence;
-                    if (voltage_assigned[adjacent_board_position]==0){
-                        matrix[actual_matrix_position][mailbox_to_matrix[adjacent_board_position]] -= inverse_total_resistence;
-                    }
-                    if (voltage_assigned[adjacent_board_position]==1){
-                        matrix[actual_matrix_position][number_of_unknowns]+=inverse_total_resistence;
-                    }
-                    if (voltage_assigned[adjacent_board_position]==-1){
-                        matrix[actual_matrix_position][number_of_unknowns]-=inverse_total_resistence;
-                    }
-                }
-            }
-        }
-    }
-    solve_matrix(matrix, number_of_unknowns, side_size);
-    //Calculation of total current flux.
-    //Calculation of current in the alpha side.
-    float entering_current = 0.0F;
-    for (uint16_t i = 0; i < side_size; i++){
-        uint16_t actual_board_position = red_connected_alpha[i];
-        for (uint16_t j = 0; j < 2; j++){
-            uint16_t adjacent_board_position;
-            switch (j){
-            case 0:
-                adjacent_board_position = actual_board_position+(side_size+1);
-                break;
-            case 1:
-                adjacent_board_position = actual_board_position+(side_size+2);
-                break;
-            }
-            if (big_board[adjacent_board_position] != 2){
-                float total_resistence = 0.0F;
-                //Code dependent of the red player.
-                if (big_board[actual_board_position]==0){
-                    total_resistence += 0.5F;
-                }
-                if (big_board[actual_board_position]==1){
-                    total_resistence += 50.0F;
-                }
-                if (big_board[actual_board_position]==-1){
-                    total_resistence += 0.005F;
-                }
-                if (big_board[adjacent_board_position]==0){
-                    total_resistence += 0.5F;
-                }
-                if (big_board[adjacent_board_position]==1){
-                    total_resistence += 50.0F;
-                }
-                if (big_board[adjacent_board_position]==-1){
-                    total_resistence += 0.005F;
-                }
-                float inverse_total_resistence = 1.0F/total_resistence;
-                entering_current += (1.0F-matrix[mailbox_to_matrix[adjacent_board_position]][number_of_unknowns])*inverse_total_resistence;
-            }
-        }
-    }
-    //Calculation of current in the beta side.
-    float exiting_current = 0.0F;
-    for (uint16_t i = 0; i < side_size; i++){
-        uint16_t actual_board_position = red_connected_beta[i];
-        for (uint16_t j = 0; j < 2; j++){
-            uint16_t adjacent_board_position;
-            switch (j){
-            case 0:
-                adjacent_board_position = actual_board_position-(side_size+1);
-                break;
-            case 1:
-                adjacent_board_position = actual_board_position-(side_size+2);;
-                break;
-            }
-            if (big_board[adjacent_board_position] != 2){
-                float total_resistence = 0.0F;
-                //Code dependent of the red player.
-                if (big_board[actual_board_position]==0){
-                    total_resistence += 0.5F;
-                }
-                if (big_board[actual_board_position]==1){
-                    total_resistence += 50.0F;
-                }
-                if (big_board[actual_board_position]==-1){
-                    total_resistence += 0.005F;
-                }
-                if (big_board[adjacent_board_position]==0){
-                    total_resistence += 0.5F;
-                }
-                if (big_board[adjacent_board_position]==1){
-                    total_resistence += 50.0F;
-                }
-                if (big_board[adjacent_board_position]==-1){
-                    total_resistence += 0.005F;
-                }
-                float inverse_total_resistence = 1.0F/total_resistence;
-                exiting_current += (matrix[mailbox_to_matrix[adjacent_board_position]][number_of_unknowns]+1.0F)*inverse_total_resistence;
-            }
-        }
-    }
-    //And the average of exiting and entering current
-    float total_current_flux_for_red = (exiting_current+entering_current)/2;
-    delete []voltage_assigned;
-    delete []mailbox_to_matrix;
-    for (uint16_t i = 0; i < number_of_unknowns; i++){
-        delete [] matrix[i];
-    }
-    delete []matrix;
-    return total_current_flux_for_red;
-}
-
-uint16_t solve_matrix(float **matrix, uint16_t total_number_of_unknowns, uint16_t central_diagonal_width){
-//    for(uint16_t i = 0; i < total_number_of_unknowns; i++){
-//        std::cout << "[" << matrix[i][0] ;
-//        for(uint16_t j=1; j<total_number_of_unknowns; j++){
-//            std::cout << "," << matrix[i][j] ;
+//    uint16_t *mailbox_to_matrix = new uint16_t[big_board_size];
+//    for (uint16_t i = 0; i < side_size; i++){
+//        for (uint16_t j = 0; j < (side_size-2); j++){
+//            mailbox_to_matrix[(i+1)*(side_size+2)+(j+2)] = i*(side_size-2)+j;
 //        }
-//        std::cout << "],";
 //    }
-//    std::cout << std::endl;
-//    std::cout << "[";
-//    for(uint16_t i = 0; i < total_number_of_unknowns; i++){
-//        std::cout << matrix[i][total_number_of_unknowns] << ",";
+//    //The matrix filler cycle began:
+//    for (uint16_t i = 0; i < number_of_hexes; i++){
+//        uint16_t actual_board_position = mailbox_to_big_board[i];
+//        if (voltage_assigned[actual_board_position]==0){
+//            uint16_t actual_matrix_position = mailbox_to_matrix[actual_board_position];
+//            for (uint16_t j = 0; j < 6; j++){
+//                uint16_t adjacent_board_position;
+//                switch (j){
+//                case 0:
+//                    adjacent_board_position = actual_board_position+1;
+//                    break;
+//                case 1:
+//                    adjacent_board_position = actual_board_position+(side_size+2);
+//                    break;
+//                case 2:
+//                    adjacent_board_position = actual_board_position+(side_size+1);
+//                    break;
+//                case 3:
+//                    adjacent_board_position = actual_board_position-1;
+//                    break;
+//                case 4:
+//                    adjacent_board_position = actual_board_position-(side_size+2);
+//                    break;
+//                case 5:
+//                    adjacent_board_position = actual_board_position-(side_size+1);
+//                    break;
+//                }
+//                if (big_board[adjacent_board_position] != 2){
+//                    float total_resistence = 0.0F;
+//                    //Code dependent of the blue player.
+//                    if (big_board[actual_board_position]==0){
+//                        total_resistence += 0.5F;
+//                    }
+//                    if (big_board[actual_board_position]==1){
+//                        total_resistence += 0.005F;
+//                    }
+//                    if (big_board[actual_board_position]==-1){
+//                        total_resistence += 50.0F;
+//                    }
+//                    if (big_board[adjacent_board_position]==0){
+//                        total_resistence += 0.5F;
+//                    }
+//                    if (big_board[adjacent_board_position]==1){
+//                        total_resistence += 0.005F;
+//                    }
+//                    if (big_board[adjacent_board_position]==-1){
+//                        total_resistence += 50.0F;
+//                    }
+//                    float inverse_total_resistence = 1.0F/total_resistence;
+//                    sparse_matrix.add_assignement(actual_matrix_position, actual_matrix_position, +inverse_total_resistence);
+//                    if (voltage_assigned[adjacent_board_position]==0){
+//                        sparse_matrix.add_assignement(actual_matrix_position, mailbox_to_matrix[adjacent_board_position], -inverse_total_resistence);
+//                    }
+//                    if (voltage_assigned[adjacent_board_position]==1){
+//                        b_column_matrix[actual_matrix_position] += inverse_total_resistence;
+//                    }
+//                    if (voltage_assigned[adjacent_board_position]==-1){
+//                        b_column_matrix[actual_matrix_position] -= inverse_total_resistence;
+//                    }
+//                }
+//            }
+//        }
 //    }
-//    std::cout << std::endl;
-    float epsilon = 0.00000001F;
-    for (uint16_t i=0;i<total_number_of_unknowns-1;i++){
-        uint16_t optimization_big_diagonal = i+central_diagonal_width;
-        for (uint16_t k=i+1;((k<total_number_of_unknowns)&&(k<=optimization_big_diagonal));k++){
-            if (matrix[k][i]*matrix[k][i] > epsilon){
-                float t=matrix[k][i]/matrix[i][i];
-                for (uint16_t j=i;((j<total_number_of_unknowns)&&(j<=optimization_big_diagonal));j++){
-                    //make the elements below the pivot elements equal to zero or eliminate the variables.
-                    matrix[k][j]=matrix[k][j]-t*matrix[i][j];
-                }
-                matrix[k][total_number_of_unknowns]=matrix[k][total_number_of_unknowns]-t*matrix[i][total_number_of_unknowns];
-            }
-        }
-    }
-    for (uint16_t i = total_number_of_unknowns-1; i > 0; i--){
-        //In the following loop the value used inside the loop isn't k, but k-1.
-        //The problem is in the loop condition, as k can't be negative.
-        uint16_t optimization_big_diagonal;
-        if (i<central_diagonal_width){
-            optimization_big_diagonal = 0;
-        } else {
-            optimization_big_diagonal = i-central_diagonal_width;
-        }
-        for (uint16_t k = i; ((k > 0)&&(k>optimization_big_diagonal)); k--){
-            uint16_t t_k = k-1;
-            float t= matrix[t_k][i]/matrix[i][i];
-            matrix[t_k][i]=matrix[t_k][i]-t*matrix[i][i];
-            matrix[t_k][total_number_of_unknowns]=matrix[t_k][total_number_of_unknowns]-t*matrix[i][total_number_of_unknowns];
-        }
-
-    }
-    for (uint16_t i = 0; i < total_number_of_unknowns; i++){
-        matrix[i][total_number_of_unknowns]= matrix[i][total_number_of_unknowns]/matrix[i][i];
-        matrix[i][i]=1.0F;
-    }
-    return 0;
-}
+//    float *solution_by_sparse_matrix = sparse_matrix.solve_matrix(b_column_matrix);
+////    for (uint16_t i = 0; i < number_of_unknowns; i++){
+////        std::cout << (matrix[i][number_of_unknowns] - solution_by_sparse_matrix[i]) << "    ";
+////    }
+//    //Calculation of total current flux.
+//    //Calculation of current in the alpha side.
+//    float entering_current = 0.0F;
+//    for (uint16_t i = 0; i < side_size; i++){
+//        uint16_t actual_board_position = blue_connected_alpha[i];
+//        for (uint16_t j = 0; j < 2; j++){
+//            uint16_t adjacent_board_position;
+//            switch (j){
+//            case 0:
+//                adjacent_board_position = actual_board_position-(side_size+1);
+//                break;
+//            case 1:
+//                adjacent_board_position = actual_board_position+1;;
+//                break;
+//            }
+//            if (big_board[adjacent_board_position] != 2){
+//                float total_resistence = 0.0F;
+//                //Code dependent of the blue player.
+//                if (big_board[actual_board_position]==0){
+//                    total_resistence += 0.5F;
+//                }
+//                if (big_board[actual_board_position]==1){
+//                    total_resistence += 0.005F;
+//                }
+//                if (big_board[actual_board_position]==-1){
+//                    total_resistence += 50.0F;
+//                }
+//                if (big_board[adjacent_board_position]==0){
+//                    total_resistence += 0.5F;
+//                }
+//                if (big_board[adjacent_board_position]==1){
+//                    total_resistence += 0.005F;
+//                }
+//                if (big_board[adjacent_board_position]==-1){
+//                    total_resistence += 50.0F;
+//                }
+//                float inverse_total_resistence = 1.0F/total_resistence;
+//                //entering_current += (1.0F-matrix[mailbox_to_matrix[adjacent_board_position]][number_of_unknowns])*inverse_total_resistence;
+//                entering_current += (1.0F-solution_by_sparse_matrix[mailbox_to_matrix[adjacent_board_position]])*inverse_total_resistence;
+//            }
+//        }
+//    }
+//    //Calculation of current in the beta side.
+//    float exiting_current = 0.0F;
+//    for (uint16_t i = 0; i < side_size; i++){
+//        uint16_t actual_board_position = blue_connected_beta[i];
+//        for (uint16_t j = 0; j < 2; j++){
+//            uint16_t adjacent_board_position;
+//            switch (j){
+//            case 0:
+//                adjacent_board_position = actual_board_position+(side_size+1);
+//                break;
+//            case 1:
+//                adjacent_board_position = actual_board_position-1;;
+//                break;
+//            }
+//            if (big_board[adjacent_board_position] != 2){
+//                float total_resistence = 0.0F;
+//                //Code dependent of the blue player.
+//                if (big_board[actual_board_position]==0){
+//                    total_resistence += 0.5F;
+//                }
+//                if (big_board[actual_board_position]==1){
+//                    total_resistence += 0.005F;
+//                }
+//                if (big_board[actual_board_position]==-1){
+//                    total_resistence += 50.0F;
+//                }
+//                if (big_board[adjacent_board_position]==0){
+//                    total_resistence += 0.5F;
+//                }
+//                if (big_board[adjacent_board_position]==1){
+//                    total_resistence += 0.005F;
+//                }
+//                if (big_board[adjacent_board_position]==-1){
+//                    total_resistence += 50.0F;
+//                }
+//                float inverse_total_resistence = 1.0F/total_resistence;
+//                //exiting_current += (matrix[mailbox_to_matrix[adjacent_board_position]][number_of_unknowns]+1.0F)*inverse_total_resistence;
+//                exiting_current += (solution_by_sparse_matrix[mailbox_to_matrix[adjacent_board_position]]+1.0F)*inverse_total_resistence;
+//            }
+//        }
+//    }
+//    //And the average of exiting and entering current
+//    float total_current_flux_for_blue = (exiting_current+entering_current)/2;
+//    delete []voltage_assigned;
+//    delete []mailbox_to_matrix;
+//    delete [] b_column_matrix;
+//    delete [] solution_by_sparse_matrix;
+//    return total_current_flux_for_blue;
+//}
+//
+//float HexBoard::evaluation_from_red_perspective(){
+//    int8_t *voltage_assigned = new int8_t[big_board_size];
+//    for (uint16_t i = 0; i < big_board_size; i++){
+//        voltage_assigned[i] = 0;
+//    }
+//    for (uint16_t i = 0; i < side_size; i++){
+//        voltage_assigned[red_connected_alpha[i]] = 1;
+//        voltage_assigned[red_connected_beta[i]] = -1;
+//    }
+//    uint16_t number_of_unknowns = (side_size-2)*side_size;
+//    float **matrix = new float*[number_of_unknowns];
+//    for(uint16_t i = 0; i < number_of_unknowns; i++){
+//        matrix[i] = new float[number_of_unknowns+1];
+//        for (uint16_t j = 0; j < number_of_unknowns+1; j++){
+//            matrix[i][j] = 0.0F;
+//        }
+//    }
+//    uint16_t *mailbox_to_matrix = new uint16_t[big_board_size];
+//    for (uint16_t i = 0; i < (side_size-2); i++){
+//        for (uint16_t j = 0; j < side_size; j++){
+//            mailbox_to_matrix[(i+2)*(side_size+2)+(j+1)] = i*side_size+j;
+//        }
+//    }
+//    //The matrix filler cycle began:
+//    for (uint16_t i = 0; i < number_of_hexes; i++){
+//        uint16_t actual_board_position = mailbox_to_big_board[i];
+//        if (voltage_assigned[actual_board_position]==0){
+//            uint16_t actual_matrix_position = mailbox_to_matrix[actual_board_position];
+//            for (uint16_t j = 0; j < 6; j++){
+//                uint16_t adjacent_board_position;
+//                switch (j){
+//                case 0:
+//                    adjacent_board_position = actual_board_position+1;
+//                    break;
+//                case 1:
+//                    adjacent_board_position = actual_board_position+(side_size+2);
+//                    break;
+//                case 2:
+//                    adjacent_board_position = actual_board_position+(side_size+1);
+//                    break;
+//                case 3:
+//                    adjacent_board_position = actual_board_position-1;
+//                    break;
+//                case 4:
+//                    adjacent_board_position = actual_board_position-(side_size+2);
+//                    break;
+//                case 5:
+//                    adjacent_board_position = actual_board_position-(side_size+1);
+//                    break;
+//                }
+//                if (big_board[adjacent_board_position] != 2){
+//                    float total_resistence = 0.0F;
+//                    //Code dependent of the red player.
+//                    if (big_board[actual_board_position]==0){
+//                        total_resistence += 0.5F;
+//                    }
+//                    if (big_board[actual_board_position]==1){
+//                        total_resistence += 50.0F;
+//                    }
+//                    if (big_board[actual_board_position]==-1){
+//                        total_resistence += 0.005F;
+//                    }
+//                    if (big_board[adjacent_board_position]==0){
+//                        total_resistence += 0.5F;
+//                    }
+//                    if (big_board[adjacent_board_position]==1){
+//                        total_resistence += 50.0F;
+//                    }
+//                    if (big_board[adjacent_board_position]==-1){
+//                        total_resistence += 0.005F;
+//                    }
+//                    float inverse_total_resistence = 1.0F/total_resistence;
+//                    matrix[actual_matrix_position][actual_matrix_position] += inverse_total_resistence;
+//                    if (voltage_assigned[adjacent_board_position]==0){
+//                        matrix[actual_matrix_position][mailbox_to_matrix[adjacent_board_position]] -= inverse_total_resistence;
+//                    }
+//                    if (voltage_assigned[adjacent_board_position]==1){
+//                        matrix[actual_matrix_position][number_of_unknowns]+=inverse_total_resistence;
+//                    }
+//                    if (voltage_assigned[adjacent_board_position]==-1){
+//                        matrix[actual_matrix_position][number_of_unknowns]-=inverse_total_resistence;
+//                    }
+//                }
+//            }
+//        }
+//    }
+//    solve_matrix(matrix, number_of_unknowns, side_size);
+//    //Calculation of total current flux.
+//    //Calculation of current in the alpha side.
+//    float entering_current = 0.0F;
+//    for (uint16_t i = 0; i < side_size; i++){
+//        uint16_t actual_board_position = red_connected_alpha[i];
+//        for (uint16_t j = 0; j < 2; j++){
+//            uint16_t adjacent_board_position;
+//            switch (j){
+//            case 0:
+//                adjacent_board_position = actual_board_position+(side_size+1);
+//                break;
+//            case 1:
+//                adjacent_board_position = actual_board_position+(side_size+2);
+//                break;
+//            }
+//            if (big_board[adjacent_board_position] != 2){
+//                float total_resistence = 0.0F;
+//                //Code dependent of the red player.
+//                if (big_board[actual_board_position]==0){
+//                    total_resistence += 0.5F;
+//                }
+//                if (big_board[actual_board_position]==1){
+//                    total_resistence += 50.0F;
+//                }
+//                if (big_board[actual_board_position]==-1){
+//                    total_resistence += 0.005F;
+//                }
+//                if (big_board[adjacent_board_position]==0){
+//                    total_resistence += 0.5F;
+//                }
+//                if (big_board[adjacent_board_position]==1){
+//                    total_resistence += 50.0F;
+//                }
+//                if (big_board[adjacent_board_position]==-1){
+//                    total_resistence += 0.005F;
+//                }
+//                float inverse_total_resistence = 1.0F/total_resistence;
+//                entering_current += (1.0F-matrix[mailbox_to_matrix[adjacent_board_position]][number_of_unknowns])*inverse_total_resistence;
+//            }
+//        }
+//    }
+//    //Calculation of current in the beta side.
+//    float exiting_current = 0.0F;
+//    for (uint16_t i = 0; i < side_size; i++){
+//        uint16_t actual_board_position = red_connected_beta[i];
+//        for (uint16_t j = 0; j < 2; j++){
+//            uint16_t adjacent_board_position;
+//            switch (j){
+//            case 0:
+//                adjacent_board_position = actual_board_position-(side_size+1);
+//                break;
+//            case 1:
+//                adjacent_board_position = actual_board_position-(side_size+2);;
+//                break;
+//            }
+//            if (big_board[adjacent_board_position] != 2){
+//                float total_resistence = 0.0F;
+//                //Code dependent of the red player.
+//                if (big_board[actual_board_position]==0){
+//                    total_resistence += 0.5F;
+//                }
+//                if (big_board[actual_board_position]==1){
+//                    total_resistence += 50.0F;
+//                }
+//                if (big_board[actual_board_position]==-1){
+//                    total_resistence += 0.005F;
+//                }
+//                if (big_board[adjacent_board_position]==0){
+//                    total_resistence += 0.5F;
+//                }
+//                if (big_board[adjacent_board_position]==1){
+//                    total_resistence += 50.0F;
+//                }
+//                if (big_board[adjacent_board_position]==-1){
+//                    total_resistence += 0.005F;
+//                }
+//                float inverse_total_resistence = 1.0F/total_resistence;
+//                exiting_current += (matrix[mailbox_to_matrix[adjacent_board_position]][number_of_unknowns]+1.0F)*inverse_total_resistence;
+//            }
+//        }
+//    }
+//    //And the average of exiting and entering current
+//    float total_current_flux_for_red = (exiting_current+entering_current)/2;
+//    delete []voltage_assigned;
+//    delete []mailbox_to_matrix;
+//    for (uint16_t i = 0; i < number_of_unknowns; i++){
+//        delete [] matrix[i];
+//    }
+//    delete []matrix;
+//    return total_current_flux_for_red;
+//}
 
 GeneratedMoves *HexBoard::generate_possible_moves(){
     GeneratedMoves *returning_moves = new GeneratedMoves(number_of_hexes);
