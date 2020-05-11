@@ -1,59 +1,6 @@
 #include "SparseMatrix.h"
 #include <cmath>
 
-uint16_t solve_matrix_gauss(float **matrix, uint16_t total_number_of_unknowns, uint16_t central_diagonal_width){
-//    for(uint16_t i = 0; i < total_number_of_unknowns; i++){
-//        std::cout << "[" << matrix[i][0] ;
-//        for(uint16_t j=1; j<total_number_of_unknowns; j++){
-//            std::cout << "," << matrix[i][j] ;
-//        }
-//        std::cout << "],";
-//    }
-//    std::cout << std::endl;
-//    std::cout << "[";
-//    for(uint16_t i = 0; i < total_number_of_unknowns; i++){
-//        std::cout << matrix[i][total_number_of_unknowns] << ",";
-//    }
-//    std::cout << std::endl;
-//    std::cout << std::endl;
-    float epsilon = 0.00000001F;
-    for (uint16_t i=0;i<total_number_of_unknowns-1;i++){
-        uint16_t optimization_big_diagonal = i+central_diagonal_width;
-        for (uint16_t k=i+1;((k<total_number_of_unknowns)&&(k<=optimization_big_diagonal));k++){
-            if (matrix[k][i]*matrix[k][i] > epsilon){
-                float t=matrix[k][i]/matrix[i][i];
-                for (uint16_t j=i;((j<total_number_of_unknowns)&&(j<=optimization_big_diagonal));j++){
-                    //make the elements below the pivot elements equal to zero or eliminate the variables.
-                    matrix[k][j]=matrix[k][j]-t*matrix[i][j];
-                }
-                matrix[k][total_number_of_unknowns]=matrix[k][total_number_of_unknowns]-t*matrix[i][total_number_of_unknowns];
-            }
-        }
-    }
-    for (uint16_t i = total_number_of_unknowns-1; i > 0; i--){
-        //In the following loop the value used inside the loop isn't k, but k-1.
-        //The problem is in the loop condition, as k can't be negative.
-        uint16_t optimization_big_diagonal;
-        if (i<central_diagonal_width){
-            optimization_big_diagonal = 0;
-        } else {
-            optimization_big_diagonal = i-central_diagonal_width;
-        }
-        for (uint16_t k = i; ((k > 0)&&(k>optimization_big_diagonal)); k--){
-            uint16_t t_k = k-1;
-            float t= matrix[t_k][i]/matrix[i][i];
-            matrix[t_k][i]=matrix[t_k][i]-t*matrix[i][i];
-            matrix[t_k][total_number_of_unknowns]=matrix[t_k][total_number_of_unknowns]-t*matrix[i][total_number_of_unknowns];
-        }
-
-    }
-    for (uint16_t i = 0; i < total_number_of_unknowns; i++){
-        matrix[i][total_number_of_unknowns]= matrix[i][total_number_of_unknowns]/matrix[i][i];
-        matrix[i][i]=1.0F;
-    }
-    return 0;
-}
-
 SparseMatrix::SparseMatrix(uint16_t number_of_unknowns_parameter){
     number_of_unknowns = number_of_unknowns_parameter;
     row_occupation = new uint16_t[number_of_unknowns];
@@ -65,6 +12,7 @@ SparseMatrix::SparseMatrix(uint16_t number_of_unknowns_parameter){
         matrix_column_positions[i] = new uint16_t[7];
         matrix_values[i] = new float[7];
     }
+    does_plain_matrix_exists = false;
 }
 
 SparseMatrix::~SparseMatrix(){
@@ -72,6 +20,12 @@ SparseMatrix::~SparseMatrix(){
     for (uint16_t i = 0; i < number_of_unknowns; i++){
         delete [] matrix_column_positions[i];
         delete [] matrix_values[i];
+    }
+    if (true == does_plain_matrix_exists){
+        for (uint16_t i = 0; i < number_of_unknowns; i++){
+            delete [] plain_matrix[i];
+        }
+        delete [] plain_matrix;
     }
     delete [] matrix_column_positions;
     delete [] matrix_values;
@@ -119,18 +73,6 @@ uint16_t SparseMatrix::update_row_diagonal(uint16_t row, float b_column_row_valu
 }
 
 float *SparseMatrix::solve_matrix(float *b_column_matrix){
-    //We prepare the matrix for fastest resolution.
-    for (uint16_t i = 0; i < number_of_unknowns; i++){
-        uint16_t diagonal_position = 0;
-        while(i != matrix_column_positions[i][diagonal_position]){
-            diagonal_position++;
-        }
-        float diagonal_inverse = 1.0F/matrix_values[i][diagonal_position];
-        b_column_matrix[i] = b_column_matrix[i]*diagonal_inverse;
-        for(uint16_t j = 0; j < row_occupation[i]; j++){
-            matrix_values[i][j] = matrix_values[i][j]*diagonal_inverse;
-        }
-    }
     //We use the following implementation of conjugate gradient descent (from Wikipedia):
     //r_0 = b - Ax_0
     float *actual_x = new float[number_of_unknowns];
@@ -183,7 +125,7 @@ float *SparseMatrix::solve_matrix(float *b_column_matrix){
                 max_error = std::abs(future_r[i]);
             }
         }
-        if ((max_error < 0.01F)|| (k > 30)){
+        if (k >= 20){
             delete [] actual_x;
             delete [] actual_r;
             delete [] actual_p;
@@ -229,19 +171,90 @@ float *SparseMatrix::multiply_sparse_matrix_with_column_matrix(float *column_mat
     return result_matrix;
 }
 
-float **SparseMatrix::get_plain_matrix_with_column(float *b_column_matrix){
-    float **plain_matrix = new float*[number_of_unknowns];
-    for (uint16_t i = 0; i < number_of_unknowns; i++){
-        plain_matrix[i] = new float[number_of_unknowns + 1];
-        for (uint16_t j = 0; j < number_of_unknowns + 1; j++){
-            plain_matrix[i][j] = 0.0F;
+float *SparseMatrix::solve_matrix_gauss(float *column_matrix, uint16_t central_diagonal_width){
+    if (false == does_plain_matrix_exists){
+        plain_matrix = new float*[number_of_unknowns];
+        for (uint16_t i = 0; i < number_of_unknowns; i++){
+            plain_matrix[i] = new float[number_of_unknowns + 1];
+            for (uint16_t j = 0; j < number_of_unknowns + 1; j++){
+                plain_matrix[i][j] = 0.0F;
+            }
+        }
+        does_plain_matrix_exists = true;
+    } else {
+        for (uint16_t i = 0; i < number_of_unknowns; i++){
+            plain_matrix[i][number_of_unknowns] = 0.0F;
+        }
+        for (uint16_t i = 0; i < number_of_unknowns; i++){
+            uint16_t inferior_value = 0;
+            if (i > central_diagonal_width){
+                inferior_value = i - central_diagonal_width;
+            }
+            uint16_t superior_value = number_of_unknowns;
+            if ((i + central_diagonal_width) < number_of_unknowns){
+                superior_value = i + central_diagonal_width;
+            }
+            for (uint16_t j = inferior_value; j <= superior_value; j++){
+                plain_matrix[i][j] = 0.0F;
+            }
         }
     }
     for (uint16_t i = 0; i < number_of_unknowns; i++){
         for (uint16_t j = 0; j < row_occupation[i]; j++){
             plain_matrix[i][matrix_column_positions[i][j]] = matrix_values[i][j];
         }
-        plain_matrix[i][number_of_unknowns] = b_column_matrix[i];
+        plain_matrix[i][number_of_unknowns] = column_matrix[i];
     }
-    return plain_matrix;
+//    for(uint16_t i = 0; i < total_number_of_unknowns; i++){
+//        std::cout << "[" << matrix[i][0] ;
+//        for(uint16_t j=1; j<total_number_of_unknowns; j++){
+//            std::cout << "," << matrix[i][j] ;
+//        }
+//        std::cout << "],";
+//    }
+//    std::cout << std::endl;
+//    std::cout << "[";
+//    for(uint16_t i = 0; i < total_number_of_unknowns; i++){
+//        std::cout << matrix[i][total_number_of_unknowns] << ",";
+//    }
+//    std::cout << std::endl;
+//    std::cout << std::endl;
+    float epsilon = 0.00000001F;
+    for (uint16_t i=0;i<number_of_unknowns-1;i++){
+        uint16_t optimization_big_diagonal = i+central_diagonal_width;
+        for (uint16_t k=i+1;((k<number_of_unknowns)&&(k<=optimization_big_diagonal));k++){
+            if (plain_matrix[k][i]*plain_matrix[k][i] > epsilon){
+                float t=plain_matrix[k][i]/plain_matrix[i][i];
+                for (uint16_t j=i;((j<number_of_unknowns)&&(j<=optimization_big_diagonal));j++){
+                    //make the elements below the pivot elements equal to zero or eliminate the variables.
+                    plain_matrix[k][j]=plain_matrix[k][j]-t*plain_matrix[i][j];
+                }
+                plain_matrix[k][number_of_unknowns]=plain_matrix[k][number_of_unknowns]-t*plain_matrix[i][number_of_unknowns];
+            }
+        }
+    }
+    for (uint16_t i = number_of_unknowns-1; i > 0; i--){
+        //In the following loop the value used inside the loop isn't k, but k-1.
+        //The problem is in the loop condition, as k can't be negative.
+        uint16_t optimization_big_diagonal;
+        if (i<central_diagonal_width){
+            optimization_big_diagonal = 0;
+        } else {
+            optimization_big_diagonal = i-central_diagonal_width;
+        }
+        for (uint16_t k = i; ((k > 0)&&(k>optimization_big_diagonal)); k--){
+            uint16_t t_k = k-1;
+            float t= plain_matrix[t_k][i]/plain_matrix[i][i];
+            plain_matrix[t_k][i]=plain_matrix[t_k][i]-t*plain_matrix[i][i];
+            plain_matrix[t_k][number_of_unknowns]=plain_matrix[t_k][number_of_unknowns]-t*plain_matrix[i][number_of_unknowns];
+        }
+
+    }
+    float *solutions = new float[number_of_unknowns];
+    for (uint16_t i = 0; i < number_of_unknowns; i++){
+        plain_matrix[i][number_of_unknowns]= plain_matrix[i][number_of_unknowns]/plain_matrix[i][i];
+        solutions[i] = plain_matrix[i][number_of_unknowns];
+        plain_matrix[i][i]=1.0F;
+    }
+    return solutions;
 }

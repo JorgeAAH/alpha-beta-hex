@@ -146,8 +146,7 @@ uint16_t IncrementalEvaluationMatrix::set_hex_to_board(int8_t *big_board, uint16
 
 float IncrementalEvaluationMatrix::evaluate(){
     float epsilon = 0.000000001F;
-    float **plain_matrix = matrix->get_plain_matrix_with_column(b_column_matrix);
-    solve_matrix_gauss(plain_matrix, number_of_unknowns, side_size);
+    float *solution = matrix->solve_matrix(b_column_matrix);
 //    if (1 == player_evaluated){
 //        std::cout << std::endl;
 //        for (uint16_t i = 0; i < number_of_unknowns; i++){
@@ -157,10 +156,10 @@ float IncrementalEvaluationMatrix::evaluate(){
     float current = 0.0F;
     for (uint16_t i = 0; i < number_of_unknowns; i++){
         if (b_column_matrix[i] > epsilon){
-            current += (1.0F-plain_matrix[i][number_of_unknowns])*b_column_matrix[i];
+            current += (1.0F-solution[i])*b_column_matrix[i];
         } else {
             if (b_column_matrix[i] < -epsilon){
-                current -= (1.0F+plain_matrix[i][number_of_unknowns])*b_column_matrix[i];
+                current -= (1.0F+solution[i])*b_column_matrix[i];
             }
         }
     }
@@ -170,10 +169,7 @@ float IncrementalEvaluationMatrix::evaluate(){
 //            std::cout << b_column_matrix[i] << std::endl;
 //        }
 //    }
-    for(uint16_t i = 0; i < number_of_unknowns; i++){
-        delete [] plain_matrix[i];
-    }
-    delete [] plain_matrix;
+    delete [] solution;
 //    std::cout << std::endl;
 //    std::cout << current*0.5 << std::endl;
     return current*0.5F;
