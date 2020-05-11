@@ -2,6 +2,12 @@
 
 TranspositionTable engine_transposition_table;
 
+struct TranspositionEntry{
+    uint32_t position_key;
+    uint8_t generation;
+    TranspositionData position_data;
+};
+
 //To test 29/03/2020.
 uint32_t number_of_transposition_table_lookups;
 uint32_t number_of_transposition_table_hits;

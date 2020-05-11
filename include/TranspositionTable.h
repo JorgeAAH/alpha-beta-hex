@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+struct TranspositionEntry;
+
 struct TranspositionData{
     uint16_t best_move;
     int16_t evaluation_value;
@@ -11,12 +13,6 @@ struct TranspositionData{
         //1 from pv-nodes (exact).
         //2 from cut-nodes (lower bound).
         //3 from all-nodes (upper bound).
-};
-
-struct TranspositionEntry{
-    uint32_t position_key;
-    uint8_t generation;
-    TranspositionData position_data;
 };
 
 class TranspositionTable

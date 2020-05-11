@@ -19,7 +19,7 @@ class HexBoard {
         uint64_t get_zobrist_hash();
         uint16_t make_move(uint16_t move_made);
         uint16_t unmake_move(uint16_t move_to_be_unmade);
-        uint16_t reset_the_board(); //UPDATE NEEDED!!!
+        uint16_t reset_the_board();
         int8_t get_player_to_move();
         int8_t check_winning_conditions(); //Return 1 for blue has won, -1 for red, 0 for nobody.
         int16_t evaluate_board();

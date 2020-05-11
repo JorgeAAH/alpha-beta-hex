@@ -1,7 +1,10 @@
+#include "Search.h"
 //TEMPORAL
 #include <iostream>
 //TEMPORAL
-#include "Search.h"
+#include "HexBoard.h"
+#include "TranspositionTable.h"
+#include "MoveGeneration.h"
 
 uint8_t root_depth;
 uint16_t PV_move;
